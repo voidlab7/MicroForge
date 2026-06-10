@@ -67,6 +67,12 @@ R3: pattern=["git", "push"],          decision=Allow
 
 ## T5: Host Executable 路径回退
 
+> **关键行为**：回退逻辑取决于是否定义了 `host_executable()` 条目。
+> - **已定义** `host_executable(name="X", paths=[...])` → 只有白名单中的路径能回退
+> - **未定义** → 任何绝对路径的 `X` 调用均可回退（无白名单 = 无限制）
+
+### T5-A: 已定义 host_executable（白名单模式）
+
 策略：`host_executable(name="git", paths=["/usr/bin/git", "/opt/homebrew/bin/git"])`
 规则：`pattern=["git"], decision=Prompt`
 
@@ -75,22 +81,45 @@ R3: pattern=["git", "push"],          decision=Allow
 | T5.1 | `["/usr/bin/git", "status"]` | **Prompt**（路径在白名单中，回退成功） |
 | T5.2 | `["/opt/homebrew/bin/git", "status"]` | **Prompt**（路径在白名单中） |
 | T5.3 | `["/tmp/evil/git", "status"]` | **不匹配**（路径不在白名单，拒绝回退）→ 走 fallback |
-| T5.4 | `["/usr/bin/npm", "install"]` | **不匹配**（npm 没有 host_executable 定义）→ 走 fallback |
+
+### T5-B: 未定义 host_executable（无限制模式）
+
+策略：**无** `host_executable()` 定义
+规则：`pattern=["npm"], decision=Prompt`
+
+| # | 命令 | 期望 |
+|---|------|------|
+| T5.4 | `["/usr/bin/npm", "install"]` | **Prompt**（未定义 host_executable → 回退允许，用 "npm" 重匹配命中） |
+
+### T5-C: 无 basename 规则
+
+策略：无 host_executable，也无对应 basename 规则
+规则：无 "git" 相关规则
+
+| # | 命令 | 期望 |
+|---|------|------|
+| T5.5 | `["/usr/bin/git", "status"]` | **不匹配**（basename "git" 无规则 → 回退也无法命中）→ 走 fallback |
 
 ---
 
 ## T6: 审批持久化 — 禁止列表
 
-禁止前缀：`["python3", "bash", "sudo", "git"]`
+> **关键行为**：禁止检查使用**精确长度匹配**——待持久化命令的 token 数必须与禁止项的 token 数完全相同才会被拦截。
+> - 例如：禁止项 `["python3"]`（1 token）不会拦截 `["python3", "-c", "print(1)"]`（3 token），只会拦截 `["python3"]`（1 token）
+> - 禁止项 `["python3", "-c"]`（2 token）也不会拦截上述3-token命令
+> - 因此 T6.1 的实际行为与直觉不同——详见下方
 
-| # | 操作 | 期望 |
-|---|------|------|
-| T6.1 | 持久化 `["python3", "-c", "print(1)"]` | **拒绝**（"python3" 在禁止列表中） |
-| T6.2 | 持久化 `["npm", "install"]` | **允许**（"npm" 不在禁止列表中） |
-| T6.3 | 持久化 `["bash", "script.sh"]` | **拒绝** |
-| T6.4 | 持久化 `["sudo", "apt", "update"]` | **拒绝** |
-| T6.5 | 持久化 `["git", "status"]` | **拒绝** |
-| T6.6 | 持久化 `["cargo", "build"]` | **允许** |
+禁止前缀（编译期硬编码，摘录）：`["python3"]`, `["python3", "-c"]`, `["bash"]`, `["bash", "-lc"]`, `["sh"]`, `["sh", "-c"]`, `["sudo"]`, `["git"]`, `["node"]`, `["node", "-e"]`, `["ruby"]`, `["ruby", "-e"]`, `["perl"]`, `["perl", "-e"]`
+
+| # | 待持久化命令 | 精确匹配的禁止项 | 期望 |
+|---|------------|----------------|------|
+| T6.1 | `["python3"]` | 命中 `["python3"]` | **拒绝** |
+| T6.2 | `["python3", "-c"]` | 命中 `["python3", "-c"]` | **拒绝** |
+| T6.3 | `["bash", "-lc"]` | 命中 `["bash", "-lc"]` | **拒绝** |
+| T6.4 | `["sq"]` | 不匹配任何 | **允许** |
+| T6.5 | `["git", "status"]` | 不匹配 `["git"]`（长度2≠1） | **允许**（但 `["git"]`（1 token）会被拦截） |
+| T6.6 | `["npm", "install"]` | 不匹配任何 | **允许** |
+| T6.7 | `["cargo", "build"]` | 不匹配任何 | **允许** |
 
 ---
 
@@ -167,4 +196,4 @@ Fallback 行为：
 
 > "请对刚才的实现运行 execpolicy-test-suite.md 中的所有测试用例。
 > 对每个未通过的测试，解释失败原因并修复代码。
-> 最终输出通过率：X/47 通过。"
+> 最终输出通过率：X/48 通过。"
